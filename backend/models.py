@@ -24,3 +24,13 @@ class Order(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     assigned_agent = relationship("User")
+
+class DriverLocation(Base):
+    __tablename__ = "driver_locations"
+    id = Column(Integer, primary_key=True, index=True)
+    agent_id = Column(Integer, ForeignKey('users.id'))
+    latitude = Column(Float)
+    longitude = Column(Float)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+
+    agent = relationship("User")
