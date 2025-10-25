@@ -1,11 +1,9 @@
 from backend import db, models
-from fastapi import FastAPI
-from fastapi import Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Security
 from sqlalchemy.orm import Session
 from backend.models import User, Order, DriverLocation
 from backend.db import SessionLocal
 from pydantic import BaseModel, EmailStr
-from fastapi import WebSocket, WebSocketDisconnect, Security
 from fastapi.security import OAuth2PasswordBearer
 from typing import List
 import json
@@ -17,7 +15,26 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
+load_dotenv(dotenv_path="./backend/.env")
+
 app= FastAPI()
+
+redis_pool = None
+
+load_dotenv("startup")
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+SECRET_KEY  = os.getenv("SECRET_KEY")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login/")
+
+@app.on_event("startup")
+async def startup():
+    global redis_pool
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    redis_pool = await redis.from_url(redis_url, decode_responses=True)
 
 def get_db():
     db = SessionLocal()
@@ -26,17 +43,6 @@ def get_db():
     finally:
         db.close()
 
-redis_url = "redis://localhost:6379"
-redis_pool = None
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-
-load_dotenv(dotenv_path="./backend/.env")
-SECRET_KEY  = os.getenv("SECRET_KEY")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login/")
 
 def get_current_user(token: str = Security(oauth2_scheme)):   
     try:
@@ -47,6 +53,14 @@ def get_current_user(token: str = Security(oauth2_scheme)):
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+def require_role(require_roles: List[str]):
+    def role_checker(current_user: dict = Depends(get_current_user)):
+        user_role = current_user.get("role")
+        if user_role not in require_roles:
+            raise HTTPException(status_code=403, detail=f"Access Denied: Requires role(s) {', '.join(require_roles)}")
+        return current_user
+    return role_checker
 
 def hash_password(password:str):
     if len(password) == 0:
@@ -68,11 +82,6 @@ def hash_password(password: str):
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
-
-@app.on_event("startup")
-async def startup():
-    global redis_pool
-    redis_pool = await redis.from_url(redis_url, decode_responses=True)
 
 class UserCreate(BaseModel):
     name: str
@@ -154,8 +163,15 @@ def read_user(user_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="User not found")
     return user
 
+@app.get("/admin/users/")
+def list_all_users(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    return db.query(User).all()
+
 @app.post("/orders/")
-async def create_order(order: OrderCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def create_order(order: OrderCreate, db: Session = Depends(get_db), current_user: dict = Depends(require_role(["admin", "agent"]))):
     db_order = Order(
         customer_name=order.customer_name,
         delivery_address=order.delivery_address,
@@ -171,7 +187,7 @@ async def create_order(order: OrderCreate, db: Session = Depends(get_db), curren
 @app.get("/orders/")
 def read_orders(
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_role(["admin", "agent", "owner"]))
 ):
     return db.query(Order).all()
 
@@ -206,7 +222,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await pubsub.close()
         
 @app.post("/locations/")
-async def update_location(loc: DriverLocationCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+async def update_location(loc: DriverLocationCreate, db: Session = Depends(get_db), current_user: dict = Depends(require_role(["admin","agent"]))):
     driver_location = DriverLocation(
         agent_id=loc.agent_id,
         latitude=loc.latitude,
@@ -225,6 +241,6 @@ async def update_location(loc: DriverLocationCreate, db: Session = Depends(get_d
     return driver_location
 
 @app.get("/locations/")
-def get_locations(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+def get_locations(db: Session = Depends(get_db), current_user: dict = Depends(require_role(["admin","owner"]))):
     return db.query(DriverLocation).all()
 
