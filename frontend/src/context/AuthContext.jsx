@@ -1,16 +1,26 @@
-import { createContext, useContext, useState } from "react";    
+import { createContext, useContext, useEffect, useState } from "react";    
 
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
 
+  useEffect(() => {
+    const raw = localStorage.getItem("opspulse_user");
+    if (raw) {
+      try { setUser(JSON.parse(raw)); } catch {}
+    }
+  }, []);
+
   function login({token, role}) {
-    setUser({ token, role});
+    const next = { token, role };
+    setUser(next);
+    localStorage.setItem("opspulse_user", JSON.stringify(next));
   }
 
   function logout() {
     setUser(null);
+    localStorage.removeItem("opspulse_user");
   }     
 
     return (    
