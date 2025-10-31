@@ -7,6 +7,11 @@ export default function ProtectedRoute({ children, allowedRoles }) {
     if (!user)
         return <Navigate to="/" />;
 
+    // Block pending users from accessing dashboards
+    if (user.role && (user.role.includes("pending") || user.role === "rejected")) {
+        return <Navigate to="/" />;
+    }
+
     if (allowedRoles && !allowedRoles.includes(user.role)) return <Navigate to="/" />;
     return children;
     }
