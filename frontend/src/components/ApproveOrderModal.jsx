@@ -25,6 +25,8 @@ export default function ApproveOrderModal({ isOpen, onClose, onApprove, order, t
 
   if (!isOpen || !order) return null;
 
+  const isReassignment = order.status && order.status !== "pending";
+
   async function handleSubmit(e) {
     e.preventDefault();
     if (!selectedAgentId) {
@@ -39,7 +41,7 @@ export default function ApproveOrderModal({ isOpen, onClose, onApprove, order, t
       await onApprove(order.id, parseInt(selectedAgentId));
       onClose();
     } catch (err) {
-      setError(err.message || "Failed to approve order");
+      setError(err.message || `Failed to ${isReassignment ? 'reassign' : 'approve'} order`);
     } finally {
       setLoading(false);
     }
@@ -49,7 +51,9 @@ export default function ApproveOrderModal({ isOpen, onClose, onApprove, order, t
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-bg-secondary rounded-2xl p-6 w-full max-w-md border border-bg-primary/60">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-text-primary">Approve Order #{order.id}</h2>
+          <h2 className="text-xl font-bold text-text-primary">
+            {isReassignment ? `Reassign Order #${order.id}` : `Approve Order #${order.id}`}
+          </h2>
           <button
             onClick={onClose}
             className="text-text-secondary hover:text-text-primary transition"
@@ -113,7 +117,7 @@ export default function ApproveOrderModal({ isOpen, onClose, onApprove, order, t
               className="flex-1 px-4 py-2 bg-accent text-bg-primary rounded-lg hover:bg-accent-hover transition font-medium"
               disabled={loading || agents.length === 0}
             >
-              {loading ? "Approving..." : "Approve & Assign"}
+              {loading ? (isReassignment ? "Reassigning..." : "Approving...") : (isReassignment ? "Reassign" : "Approve & Assign")}
             </button>
           </div>
         </form>

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import Badge from "./Badge";
 
-export default function OrdersTable({ rows = [], onDelay, onReassign, onContact }) {
+export default function OrdersTable({ rows = [], onReassign, onContact }) {
   const [showPhone, setShowPhone] = useState({});
   return (
     <div className="bg-bg-secondary/90 rounded-2xl border border-bg-primary/60 overflow-hidden">
@@ -28,7 +28,6 @@ export default function OrdersTable({ rows = [], onDelay, onReassign, onContact 
                 <td className="px-5 py-4">
                   <div className="flex gap-2">
                     <button onClick={()=>onReassign?.(r)} className="px-3 py-1 rounded bg-accent text-bg-primary text-xs">Reassign</button>
-                    <button onClick={()=>onDelay?.(r)} className="px-3 py-1 rounded bg-bg-primary text-accent border border-accent text-xs">Delay</button>
                     <button onClick={()=>{
                       if (r.agentPhone) {
                         setShowPhone(prev => ({...prev, [r.id]: !prev[r.id]}));
