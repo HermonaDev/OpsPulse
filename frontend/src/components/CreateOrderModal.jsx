@@ -1,9 +1,12 @@
 import React, { useState } from "react";
+import { geocodeAddress } from "../services/geocoding";
 
 export default function CreateOrderModal({ isOpen, onClose, onCreate, token }) {
   const [customerName, setCustomerName] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
+  const [pickupAddress, setPickupAddress] = useState("");
   const [loading, setLoading] = useState(false);
+  const [geocoding, setGeocoding] = useState(false);
   const [error, setError] = useState("");
 
   if (!isOpen) return null;
@@ -12,20 +15,57 @@ export default function CreateOrderModal({ isOpen, onClose, onCreate, token }) {
     e.preventDefault();
     setError("");
     setLoading(true);
+    setGeocoding(true);
 
     try {
-      await onCreate({
+      // Geocode delivery address
+      let deliveryCoords = null;
+      if (deliveryAddress.trim()) {
+        deliveryCoords = await geocodeAddress(deliveryAddress);
+        if (!deliveryCoords) {
+          console.warn(`Could not geocode delivery address: ${deliveryAddress}`);
+        }
+      }
+
+      // Geocode pickup address if provided
+      let pickupCoords = null;
+      if (pickupAddress.trim()) {
+        pickupCoords = await geocodeAddress(pickupAddress);
+        if (!pickupCoords) {
+          console.warn(`Could not geocode pickup address: ${pickupAddress}`);
+        }
+      }
+
+      const orderData = {
         customer_name: customerName,
         delivery_address: deliveryAddress,
-      });
+        ...(deliveryCoords && {
+          delivery_latitude: deliveryCoords.latitude,
+          delivery_longitude: deliveryCoords.longitude,
+        }),
+      };
+
+      // Add pickup data if provided
+      if (pickupAddress.trim()) {
+        orderData.pickup_address = pickupAddress;
+        if (pickupCoords) {
+          orderData.pickup_latitude = pickupCoords.latitude;
+          orderData.pickup_longitude = pickupCoords.longitude;
+        }
+      }
+
+      await onCreate(orderData);
+      
       // Reset form
       setCustomerName("");
       setDeliveryAddress("");
+      setPickupAddress("");
       onClose();
     } catch (err) {
       setError(err.message || "Failed to create order");
     } finally {
       setLoading(false);
+      setGeocoding(false);
     }
   }
 
@@ -59,17 +99,40 @@ export default function CreateOrderModal({ isOpen, onClose, onCreate, token }) {
 
           <div>
             <label className="block text-sm text-text-secondary mb-1">
-              Delivery Address
+              Delivery Address *
             </label>
             <textarea
               value={deliveryAddress}
               onChange={(e) => setDeliveryAddress(e.target.value)}
               required
-              rows={3}
+              rows={2}
               className="w-full px-4 py-2 bg-bg-primary border border-bg-primary/60 rounded-lg text-text-primary focus:outline-none focus:border-accent resize-none"
-              placeholder="Enter delivery address"
+              placeholder="e.g., Bole Road, Addis Ababa"
+            />
+            <div className="text-xs text-text-secondary mt-1">
+              Address will be automatically geocoded for map display
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm text-text-secondary mb-1">
+              Pickup Address <span className="text-xs">(Optional)</span>
+            </label>
+            <textarea
+              value={pickupAddress}
+              onChange={(e) => setPickupAddress(e.target.value)}
+              rows={2}
+              className="w-full px-4 py-2 bg-bg-primary border border-bg-primary/60 rounded-lg text-text-primary focus:outline-none focus:border-accent resize-none"
+              placeholder="e.g., Warehouse, Addis Ababa"
             />
           </div>
+
+          {geocoding && (
+            <div className="text-xs text-accent flex items-center gap-2">
+              <span className="animate-spin">⏳</span>
+              Geocoding addresses...
+            </div>
+          )}
 
           {error && (
             <div className="text-red-400 text-sm">{error}</div>

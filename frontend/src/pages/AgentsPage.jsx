@@ -3,7 +3,7 @@ import Layout from "../components/Layout";
 import Sidebar from "../components/Sidebar";
 import Topbar from "../components/Topbar";
 import { useAuth } from "../context/AuthContext";
-import { fetchUsers, fetchOrders } from "../services/api";
+import { fetchUsers, fetchOrders, fetchAgents } from "../services/api";
 
 export default function AgentsPage() {
   const { user } = useAuth();
@@ -15,35 +15,52 @@ export default function AgentsPage() {
     let active = true;
     (async () => {
       try {
-        // If owner, get agents from their orders
-        if (user?.role === "owner") {
-          const orders = await fetchOrders(undefined, user?.token);
-          if (!active) return;
-          // Get unique agent IDs from orders
-          const agentIds = [...new Set(orders
-            .map(o => o.assigned_agent_id)
-            .filter(id => id != null)
-          )];
-          
-          if (agentIds.length > 0) {
-            const users = await fetchUsers(undefined, user?.token);
-            // Filter to show only agents related to owner's orders
-            const agentUsers = users.filter(u => 
-              u.role === "agent" && agentIds.includes(u.id)
-            );
-            setAgents(agentUsers);
-          } else {
-            setAgents([]);
-          }
-        } else {
-          // Admin sees all agents
-          const users = await fetchUsers(undefined, user?.token);
-          if (!active) return;
-          const agentUsers = users.filter(u => u.role === "agent");
-          setAgents(agentUsers);
-        }
+        // Use the new agents endpoint which handles both owner and admin cases
+        const agents = await fetchAgents(undefined, user?.token);
+        if (!active) return;
+        setAgents(agents || []);
       } catch (e) {
-        // Error handled silently
+        console.error("Failed to load agents:", e);
+        // Fallback: try old method if new endpoint fails
+        try {
+          if (user?.role === "owner") {
+            const orders = await fetchOrders(undefined, user?.token);
+            const agentIds = [...new Set(orders
+              .map(o => o.assigned_agent_id)
+              .filter(id => id != null)
+            )];
+            
+            if (agentIds.length > 0) {
+              // Try to get user details, but create minimal objects if that fails
+              try {
+                const users = await fetchUsers(undefined, user?.token);
+                const agentUsers = users.filter(u => 
+                  u.role === "agent" && agentIds.includes(u.id)
+                );
+                setAgents(agentUsers);
+              } catch {
+                // Fallback: create minimal agent objects
+                setAgents(agentIds.map(id => ({
+                  id,
+                  name: `Agent #${id}`,
+                  email: "",
+                  phone: "",
+                  role: "agent"
+                })));
+              }
+            } else {
+              setAgents([]);
+            }
+          } else {
+            const users = await fetchUsers(undefined, user?.token);
+            if (!active) return;
+            const agentUsers = users.filter(u => u.role === "agent");
+            setAgents(agentUsers);
+          }
+        } catch (fallbackError) {
+          console.error("Fallback also failed:", fallbackError);
+          setAgents([]);
+        }
       } finally {
         setLoading(false);
       }

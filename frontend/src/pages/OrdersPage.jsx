@@ -12,6 +12,7 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -29,21 +30,24 @@ export default function OrdersPage() {
     return () => { active = false; };
   }, [user?.token]);
 
-  async function delayOrder(orderId) {
-    try {
-      const updated = await updateOrderStatus(orderId, "delayed", undefined, user?.token);
-      setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)));
-    } catch (e) {
-      // no-op
-    }
+  // Filter function for search
+  function filterOrders(orderList) {
+    if (!searchQuery.trim()) return orderList;
+    const query = searchQuery.toLowerCase();
+    return orderList.filter(o => 
+      o.id?.toString().toLowerCase().includes(query) ||
+      o.customer_name?.toLowerCase().includes(query) ||
+      o.delivery_address?.toLowerCase().includes(query) ||
+      o.status?.toLowerCase().includes(query)
+    );
   }
 
   // Separate orders by lifecycle
-  const pendingOrders = (orders || []).filter(o => o.status === "pending");
-  const activeOrders = (orders || []).filter(o => 
+  const pendingOrders = filterOrders((orders || []).filter(o => o.status === "pending"));
+  const activeOrders = filterOrders((orders || []).filter(o => 
     ["approved", "picked_up", "in_transit"].includes(o.status)
-  );
-  const pastOrders = (orders || []).filter(o => o.status === "delivered");
+  ));
+  const pastOrders = filterOrders((orders || []).filter(o => o.status === "delivered"));
 
   function statusTone(status) {
     if (status === "delivered") return "success";
@@ -94,10 +98,19 @@ export default function OrdersPage() {
         <div className="text-text-secondary">{error}</div>
       ) : (
         <div className="space-y-6">
+          <div className="mb-4">
+            <input
+              type="text"
+              placeholder="Search by order ID, customer name, address, or status..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full px-4 py-2 rounded-lg bg-bg-secondary/90 border border-bg-primary/60 text-text-primary placeholder:text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent/40"
+            />
+          </div>
           <div>
             <div className="text-xl font-bold text-accent mb-4">Pending Orders (Awaiting Approval)</div>
             {pendingRows.length > 0 ? (
-              <OrdersTable rows={pendingRows} onDelay={(r)=>delayOrder(r.rawId)} />
+              <OrdersTable rows={pendingRows} />
             ) : (
               <div className="text-text-secondary bg-bg-secondary/90 rounded-2xl border border-bg-primary/60 p-6">
                 No pending orders
@@ -107,7 +120,7 @@ export default function OrdersPage() {
           <div>
             <div className="text-xl font-bold text-accent mb-4">Active Orders</div>
             {activeRows.length > 0 ? (
-              <OrdersTable rows={activeRows} onDelay={(r)=>delayOrder(r.rawId)} />
+              <OrdersTable rows={activeRows} />
             ) : (
               <div className="text-text-secondary bg-bg-secondary/90 rounded-2xl border border-bg-primary/60 p-6">
                 No active orders
@@ -117,7 +130,7 @@ export default function OrdersPage() {
           <div>
             <div className="text-xl font-bold text-accent mb-4">Delivered Orders</div>
             {pastRows.length > 0 ? (
-              <OrdersTable rows={pastRows} onDelay={(r)=>delayOrder(r.rawId)} />
+              <OrdersTable rows={pastRows} />
             ) : (
               <div className="text-text-secondary bg-bg-secondary/90 rounded-2xl border border-bg-primary/60 p-6">
                 No delivered orders

@@ -113,8 +113,22 @@ export default function OwnerDashboard() {
   const [alerts, setAlerts] = useState([]);
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef(null);
-  const [recentSeries, setRecentSeries] = useState([5,7,6,9,11,8,10]);
+  const [recentSeries, setRecentSeries] = useState([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  
+  // Initialize recentSeries from current order count when orders are loaded
+  useEffect(() => {
+    if (recentSeries.length === 0) {
+      if (orders.length > 0) {
+        // Use actual order count
+        const currentCount = orders.length;
+        setRecentSeries(Array(7).fill(currentCount));
+      } else {
+        // Use dummy data if no orders
+        setRecentSeries([5, 7, 6, 9, 11, 8, 10]);
+      }
+    }
+  }, [orders, recentSeries.length]);
 
   useEffect(() => {
     let active = true;
@@ -154,15 +168,21 @@ export default function OwnerDashboard() {
         if (user?.role === "owner" && ownerUserId && msg.owner_id !== ownerUserId) {
           return; // Skip this order, it doesn't belong to this owner
         }
+        // Update series based on actual order count
         setOrders((prev) => {
           const exists = prev.some(o => o.id === msg.order_id);
           if (exists) return prev;
-          return [{ id: msg.order_id, customer_name: msg.customer_name, status: "pending" }, ...prev];
-        });
-        // Update series and alerts for new orders
-        setRecentSeries((prevSeries) => {
-          const nextVal = Math.max(1, (prevSeries[prevSeries.length - 1] || 7) + 1);
-          return [...prevSeries.slice(-6), nextVal];
+          
+          const newOrders = [{ id: msg.order_id, customer_name: msg.customer_name, status: "pending" }, ...prev];
+          // Update series with actual order count
+          const orderCount = newOrders.length;
+          setRecentSeries((prevSeries) => {
+            if (prevSeries.length === 0) {
+              return Array(7).fill(orderCount);
+            }
+            return [...prevSeries.slice(-6), orderCount];
+          });
+          return newOrders;
         });
         setAlerts((prevAlerts) => [{
           type: msg.event,
@@ -184,7 +204,15 @@ export default function OwnerDashboard() {
               text: `Order #${msg.order_id} → ${msg.new_status}`,
               ts: Date.now(),
             }, ...prevAlerts].slice(0, 20));
-            return prev.map((o) => (o.id === msg.order_id ? { ...o, status: msg.new_status } : o));
+            const updated = prev.map((o) => (o.id === msg.order_id ? { ...o, status: msg.new_status } : o));
+            // Update series with actual order count after status change
+            setRecentSeries((prevSeries) => {
+              if (prevSeries.length === 0) {
+                return Array(7).fill(updated.length);
+              }
+              return [...prevSeries.slice(-6), updated.length];
+            });
+            return updated;
           }
           return prev;
         });
@@ -240,17 +268,44 @@ export default function OwnerDashboard() {
 
   // recentSeries state is updated by websocket events
 
+  // Calculate daily revenue from actual orders
   const revenueBars = useMemo(() => {
+    // Check if we have delivered orders to show real data
+    const deliveredOrders = orders.filter(o => o.status === "delivered");
+    
+    if (!orders || orders.length === 0 || deliveredOrders.length === 0) {
+      // Use dummy data if no orders or no delivered orders
+      return [
+        { label: "Mon", value: 12 },
+        { label: "Tue", value: 8 },
+        { label: "Wed", value: 15 },
+        { label: "Thu", value: 10 },
+        { label: "Fri", value: 18 },
+        { label: "Sat", value: 7 },
+        { label: "Sun", value: 5 },
+      ];
+    }
+
+    // Group orders by day of week (0 = Sunday, 1 = Monday, etc.)
+    const dayCounts = [0, 0, 0, 0, 0, 0, 0]; // Sun, Mon, Tue, Wed, Thu, Fri, Sat
+    
+    deliveredOrders.forEach(order => {
+      const date = order.created_at ? new Date(order.created_at) : (order.updated_at ? new Date(order.updated_at) : new Date());
+      const dayOfWeek = date.getDay(); // 0 = Sunday, 1 = Monday, etc.
+      dayCounts[dayOfWeek] += 1;
+    });
+
+    // Map to days starting from Monday (shift array)
     return [
-      { label: "Mon", value: 12 },
-      { label: "Tue", value: 8 },
-      { label: "Wed", value: 15 },
-      { label: "Thu", value: 10 },
-      { label: "Fri", value: 18 },
-      { label: "Sat", value: 7 },
-      { label: "Sun", value: 5 },
+      { label: "Mon", value: dayCounts[1] || 0 },
+      { label: "Tue", value: dayCounts[2] || 0 },
+      { label: "Wed", value: dayCounts[3] || 0 },
+      { label: "Thu", value: dayCounts[4] || 0 },
+      { label: "Fri", value: dayCounts[5] || 0 },
+      { label: "Sat", value: dayCounts[6] || 0 },
+      { label: "Sun", value: dayCounts[0] || 0 },
     ];
-  }, []);
+  }, [orders]);
 
   const rows = (orders && orders.length ? orders : [
     { id: 836, customer_name: "Demo Customer", delivery_address: "CMC Ring Rd", status: "in_transit", assigned_agent_id: 1 },
@@ -307,7 +362,7 @@ export default function OwnerDashboard() {
             <div className="text-xl font-bold text-accent">Live Orders (last 7 updates)</div>
             <div className={`text-xs ${wsConnected ? "text-green-400" : "text-text-secondary"}`}>{wsConnected ? "Live" : "Offline"}</div>
           </div>
-          <Sparkline points={recentSeries} />
+          <Sparkline points={recentSeries.length > 0 ? recentSeries : [5, 7, 6, 9, 11, 8, 10]} />
         </div>
         <div className="bg-bg-secondary/90 rounded-2xl border border-bg-primary/60 p-0 flex flex-col overflow-hidden">
           <div className="px-6 pt-6 pb-3 text-xl font-bold text-accent">Current Cargo Operations</div>
@@ -333,14 +388,19 @@ export default function OwnerDashboard() {
         <div className="bg-bg-secondary/90 rounded-2xl border border-bg-primary/60 p-6 flex flex-col">
           <div className="text-xl font-bold text-accent mb-2">Active Alerts</div>
           <ul className="space-y-3 text-text-secondary max-h-56 overflow-auto pr-2">
-            {(alerts.length ? alerts : [
-              { type: "info", text: "Demo: connect with valid token to stream alerts", ts: Date.now() },
-            ]).map((a, idx) => (
-              <li key={idx} className="flex items-center gap-2">
-                <span className="text-accent font-medium uppercase text-xs">{a.type}</span>
-                <span className="text-text-secondary">{a.text}</span>
-              </li>
-            ))}
+            {alerts.length > 0 ? (
+              alerts.map((a, idx) => (
+                <li key={idx} className="flex items-center gap-2">
+                  <span className="text-accent font-medium uppercase text-xs">{a.type}</span>
+                  <span className="text-text-secondary">{a.text}</span>
+                  <span className="text-xs text-text-secondary/60 ml-auto">
+                    {new Date(a.ts).toLocaleTimeString()}
+                  </span>
+                </li>
+              ))
+            ) : (
+              <li className="text-text-secondary/60 italic">No active alerts</li>
+            )}
           </ul>
         </div>
       </div>

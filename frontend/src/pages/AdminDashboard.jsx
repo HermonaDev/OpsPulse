@@ -10,7 +10,7 @@ import PendingUsersCard from "../components/PendingUsersCard";
 import ApproveOrderModal from "../components/ApproveOrderModal";
 import Badge from "../components/Badge";
 import { useAuth } from "../context/AuthContext";
-import { fetchOrders, fetchUsers, updateOrderStatus, approveOrder, fetchLocations } from "../services/api";
+import { fetchOrders, fetchUsers, updateOrderStatus, approveOrder, fetchLocations, fetchVehicles } from "../services/api";
 import { connectOrdersWS } from "../services/realtime";
 
 export default function AdminDashboard() {
@@ -19,8 +19,10 @@ export default function AdminDashboard() {
   const [orders, setOrders] = useState([]);
   const [users, setUsers] = useState([]);
   const [locations, setLocations] = useState([]);
+  const [vehicles, setVehicles] = useState([]);
   const wsRef = useRef(null);
   const [approveModalOrder, setApproveModalOrder] = useState(null);
+  const [notifications, setNotifications] = useState([]);
   const sidebarItems = [
     { label: "Dashboard", href: "/dashboard/admin" },
     { label: "Orders", href: "/orders" },
@@ -62,15 +64,26 @@ export default function AdminDashboard() {
     let active = true;
     (async () => {
       try {
-        const [o, u, locs] = await Promise.all([
+        const [o, u, locs, v] = await Promise.all([
           fetchOrders(undefined, user?.token),
           fetchUsers(undefined, user?.token),
           fetchLocations(undefined, user?.token).catch(() => []),
+          fetchVehicles(undefined, user?.token).catch(() => []),
         ]);
         if (!active) return;
         setOrders(o);
         setUsers(u);
         setLocations(locs);
+        setVehicles(v);
+        // Add notifications for any pending orders that were just loaded
+        const pendingCount = o.filter(order => order.status === "pending").length;
+        if (pendingCount > 0) {
+          setNotifications((prev) => [{
+            type: "INFO",
+            message: `${pendingCount} pending order${pendingCount > 1 ? 's' : ''} awaiting approval`,
+            timestamp: new Date(),
+          }, ...prev].slice(0, 10));
+        }
       } catch {}
     })();
     return () => { active = false; };
@@ -81,17 +94,69 @@ export default function AdminDashboard() {
   }
 
   useEffect(() => {
+    if (!user?.token) return;
     const ws = connectOrdersWS(undefined, (msg) => {
-      if (msg.event === "order_created") {
-        setOrders((prev) => [{ id: msg.order_id, customer_name: msg.customer_name, status: "pending" }, ...prev]);
-      } else if (msg.event === "order_status") {
-        setOrders((prev) => prev.map((o) => (o.id === msg.order_id ? { ...o, status: msg.new_status } : o)));
-      } else if (msg.event === "user_signup" || msg.event === "user_role_updated" || msg.event === "user_deleted") {
+      try {
+        if (msg.event === "order_created") {
+          setOrders((prev) => {
+            // Check if order already exists to avoid duplicates
+            const exists = prev.some(o => o.id === msg.order_id);
+            if (exists) return prev;
+            return [{ id: msg.order_id, customer_name: msg.customer_name, status: "pending" }, ...prev];
+          });
+          // Add notification for new order
+          setNotifications((prev) => [{
+            type: "INFO",
+            message: `New order #${msg.order_id} from ${msg.customer_name || 'Unknown'}`,
+            timestamp: new Date(),
+          }, ...prev].slice(0, 10));
+        } else if (msg.event === "order_status") {
+        setOrders((prev) => {
+          const updated = prev.map((o) => (o.id === msg.order_id ? { ...o, status: msg.new_status } : o));
+          return updated;
+        });
+        // Add notification for agent assignment
+        if (msg.assigned_agent_id) {
+          setUsers((prevUsers) => {
+            const agent = prevUsers?.find(u => u.id === msg.assigned_agent_id);
+            if (agent) {
+              setNotifications((prevNotif) => [{
+                type: "INFO",
+                message: `Order #${msg.order_id} assigned to agent ${agent.name}`,
+                timestamp: new Date(),
+              }, ...prevNotif].slice(0, 10));
+            }
+            return prevUsers;
+          });
+        }
+      } else if (msg.event === "user_signup") {
         // refresh users immediately when new signup, approval, or rejection happens
+        refreshUsers();
+        // Add notification for new user registration
+        setNotifications((prev) => [{
+          type: "INFO",
+          message: `New user registration: ${msg.name} (${msg.email})`,
+          timestamp: new Date(),
+        }, ...prev].slice(0, 10));
+      } else if (msg.event === "user_role_updated" || msg.event === "user_deleted") {
         refreshUsers();
       } else if (msg.event === "location_update") {
         // Refresh locations when updated
         fetchLocations(undefined, user?.token).then(setLocations).catch(() => {});
+        // Update vehicle location if agent is assigned to a vehicle
+        setVehicles((prev) => {
+          return prev.map(v => 
+            v.assigned_agent_id === msg.agent_id 
+              ? { ...v, current_latitude: msg.latitude, current_longitude: msg.longitude }
+              : v
+          );
+        });
+      } else if (msg.event === "vehicle_registered" || msg.event === "vehicle_approved") {
+        // Refresh vehicles when updated
+        fetchVehicles(undefined, user?.token).then(setVehicles).catch(() => {});
+      }
+      } catch (err) {
+        console.error("Error handling WebSocket message:", err);
       }
     });
     wsRef.current = ws;
@@ -128,14 +193,17 @@ export default function AdminDashboard() {
       statusTone: toneFor(o.status),
       date: o.updated_at || o.created_at || "",
       rawId: o.id,
+      assignedAgentId: o.assigned_agent_id,
     };
   });
 
-  async function delayOrder(row) {
-    try {
-      const updated = await updateOrderStatus(row.rawId, "delayed", undefined, user?.token);
-      setOrders((prev) => prev.map((o) => (o.id === updated.id ? updated : o)));
-    } catch {}
+  async function handleReassign(row) {
+    setApproveModalOrder(orders.find(o => o.id === row.rawId) || null);
+  }
+
+  function handleContact(row) {
+    // Contact button already handled by OrdersTable component
+    // It shows/hides phone number
   }
 
   return (
@@ -202,18 +270,43 @@ export default function AdminDashboard() {
             locations={locations} 
             users={users} 
             orders={orders}
-            onAssignToNearest={(orderId) => {
-              // Find nearest agent logic could go here
-              console.log("Assign order to nearest agent", orderId);
+            vehicles={vehicles}
+            onAssignToNearest={async (orderId, agentId) => {
+              try {
+                const order = orders.find(o => o.id === orderId);
+                if (order) {
+                  await approveOrder(orderId, agentId, undefined, user?.token);
+                  // Refresh orders
+                  const updated = await fetchOrders(undefined, user?.token);
+                  setOrders(updated);
+                }
+              } catch (err) {
+                console.error("Failed to assign order:", err);
+              }
+            }}
+            onMarkerClick={(marker) => {
+              // Could open a detailed modal here
+              console.log("Marker clicked:", marker);
             }}
           />
         </div>
         <div className="bg-bg-secondary/90 rounded-2xl border border-bg-primary/60 p-5">
           <div className="text-xl font-bold text-accent mb-3">Notifications</div>
-          <ul className="space-y-3 text-sm text-text-secondary">
-            <li><span className="text-accent font-medium">ALERT</span>: Order #ORD811 is delayed by 1 hour</li>
-            <li><span className="text-accent font-medium">INFO</span>: New order assigned to agent Hermona Daniel</li>
-            <li><span className="text-accent font-medium">ALERT</span>: Agent Kidus Misganaw not responding</li>
+          <ul className="space-y-3 text-sm text-text-secondary max-h-96 overflow-y-auto">
+            {notifications.length === 0 ? (
+              <li className="text-text-secondary/60 italic">No notifications</li>
+            ) : (
+              notifications.map((notif, idx) => (
+                <li key={idx}>
+                  <span className={`font-medium ${
+                    notif.type === "ALERT" ? "text-orange-400" : "text-accent"
+                  }`}>{notif.type}</span>: {notif.message}
+                  <div className="text-xs text-text-secondary/60 mt-1">
+                    {notif.timestamp.toLocaleTimeString()}
+                  </div>
+                </li>
+              ))
+            )}
           </ul>
         </div>
       </div>
@@ -223,7 +316,7 @@ export default function AdminDashboard() {
           <span className="text-xl font-bold text-accent">Recent Orders</span>
           <button onClick={()=>navigate('/orders')} className="bg-accent text-bg-primary px-4 py-2 rounded-lg text-sm font-medium hover:bg-accent-hover transition">View All</button>
         </div>
-        <OrdersTable rows={orderRows} onDelay={delayOrder} />
+        <OrdersTable rows={orderRows} onReassign={handleReassign} onContact={handleContact} />
       </div>
 
       <div className="bg-bg-secondary/90 rounded-2xl border border-bg-primary/60 p-5 mb-6">

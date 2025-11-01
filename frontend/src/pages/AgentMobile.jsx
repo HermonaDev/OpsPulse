@@ -1,7 +1,7 @@
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
-import React, { useEffect, useMemo, useState } from "react";
-import { updateOrderStatus, fetchOrders } from "../services/api";
+import React, { useEffect, useMemo, useState, useRef } from "react";
+import { updateOrderStatus, fetchOrders, updateLocation, fetchVehicles } from "../services/api";
 import Badge from "../components/Badge";
 import VehicleSelectionModal from "../components/VehicleSelectionModal";
 
@@ -49,6 +49,28 @@ export default function AgentMobile() {
   const [loading, setLoading] = useState(true);
   const [showVehicleModal, setShowVehicleModal] = useState(false);
   const [pendingOrderForPickup, setPendingOrderForPickup] = useState(null);
+  
+  // Location tracking state
+  const [isTrackingLocation, setIsTrackingLocation] = useState(false);
+  const [currentLocation, setCurrentLocation] = useState(null);
+  const [locationError, setLocationError] = useState(null);
+  const [updatingLocation, setUpdatingLocation] = useState(false);
+  const [selectedVehicleId, setSelectedVehicleId] = useState(null);
+  const [availableVehicles, setAvailableVehicles] = useState([]);
+  const locationIntervalRef = useRef(null);
+  const watchIdRef = useRef(null);
+
+  // Get agent ID from token
+  const agentId = user?.token ? (() => {
+    try {
+      const tokenParts = user.token.split('.');
+      if (tokenParts.length === 3) {
+        const payload = JSON.parse(atob(tokenParts[1]));
+        return payload.user_id;
+      }
+    } catch {}
+    return null;
+  })() : null;
 
   useEffect(() => {
     let active = true;
@@ -57,16 +79,6 @@ export default function AgentMobile() {
         const data = await fetchOrders(undefined, user?.token);
         if (!active) return;
         // Filter to only show orders assigned to this agent
-        const agentId = user?.token ? (() => {
-          try {
-            const tokenParts = user.token.split('.');
-            if (tokenParts.length === 3) {
-              const payload = JSON.parse(atob(tokenParts[1]));
-              return payload.user_id;
-            }
-          } catch {}
-          return null;
-        })() : null;
         const assignedOrders = agentId 
           ? data.filter(o => o.assigned_agent_id === agentId && o.status !== "delivered")
           : data.filter(o => o.status !== "delivered");
@@ -82,7 +94,30 @@ export default function AgentMobile() {
       }
     })();
     return () => { active = false; };
-  }, [user?.token]);
+  }, [user?.token, agentId]);
+
+  // Load available vehicles
+  useEffect(() => {
+    if (user?.token) {
+      fetchVehicles(undefined, user.token)
+        .then(data => {
+          // Get vehicles assigned to this agent or available vehicles
+          const vehicles = data.filter(v => 
+            v.approval_status === "approved" && 
+            (v.assigned_agent_id === agentId || v.status === "available")
+          );
+          setAvailableVehicles(vehicles);
+          // Auto-select vehicle if agent is assigned to one
+          const assignedVehicle = vehicles.find(v => v.assigned_agent_id === agentId);
+          if (assignedVehicle) {
+            setSelectedVehicleId(assignedVehicle.id);
+          }
+        })
+        .catch(() => {
+          // Error handled
+        });
+    }
+  }, [user?.token, agentId]);
 
   function handleLogout() {
     logout();
@@ -149,6 +184,103 @@ export default function AgentMobile() {
     }
     await updateStatus(stop.order, "delivered");
   }
+
+  // Location tracking functions
+  async function sendLocationUpdate(latitude, longitude) {
+    if (!agentId || !user?.token) return;
+    
+    setUpdatingLocation(true);
+    try {
+      await updateLocation({
+        agent_id: agentId,
+        latitude,
+        longitude,
+      }, undefined, user.token);
+      setCurrentLocation({ latitude, longitude });
+      setLocationError(null);
+    } catch (error) {
+      console.error("Failed to update location:", error);
+      setLocationError("Failed to update location");
+    } finally {
+      setUpdatingLocation(false);
+    }
+  }
+
+  function getCurrentLocation() {
+    if (!navigator.geolocation) {
+      setLocationError("Geolocation is not supported by your browser");
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        sendLocationUpdate(latitude, longitude);
+      },
+      (error) => {
+        let message = "Unable to get your location";
+        if (error.code === error.PERMISSION_DENIED) {
+          message = "Location permission denied. Please enable location access.";
+        } else if (error.code === error.POSITION_UNAVAILABLE) {
+          message = "Location information unavailable";
+        } else if (error.code === error.TIMEOUT) {
+          message = "Location request timed out";
+        }
+        setLocationError(message);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }
+
+  function startLocationTracking() {
+    if (!navigator.geolocation) {
+      setLocationError("Geolocation is not supported by your browser");
+      return;
+    }
+
+    setIsTrackingLocation(true);
+    setLocationError(null);
+
+    // Send initial location
+    getCurrentLocation();
+
+    // Watch position for real-time updates
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        sendLocationUpdate(latitude, longitude);
+      },
+      (error) => {
+        console.error("Geolocation error:", error);
+        setLocationError("Location tracking error");
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+    );
+
+    // Also send periodic updates every 30 seconds as backup
+    locationIntervalRef.current = setInterval(() => {
+      getCurrentLocation();
+    }, 30000);
+  }
+
+  function stopLocationTracking() {
+    setIsTrackingLocation(false);
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    if (locationIntervalRef.current !== null) {
+      clearInterval(locationIntervalRef.current);
+      locationIntervalRef.current = null;
+    }
+  }
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopLocationTracking();
+    };
+  }, []);
 
   return (
     <div className="min-h-screen bg-bg-primary">
@@ -226,6 +358,82 @@ export default function AgentMobile() {
               ))}
             </ul>
           )}
+        </div>
+
+        {/* Location Tracking Section */}
+        <div className="px-4 py-3 bg-bg-secondary/40 border-t border-bg-primary/60">
+          <div className="mb-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-semibold text-text-primary">Location Tracking</div>
+              <div className={`w-2 h-2 rounded-full ${isTrackingLocation ? 'bg-green-400 animate-pulse' : 'bg-gray-400'}`}></div>
+            </div>
+            {currentLocation && (
+              <div className="text-xs text-text-secondary mb-2">
+                📍 {currentLocation.latitude.toFixed(4)}, {currentLocation.longitude.toFixed(4)}
+              </div>
+            )}
+            {locationError && (
+              <div className="text-xs text-red-400 mb-2">{locationError}</div>
+            )}
+          </div>
+
+          {/* Vehicle Selection (Optional) */}
+          {availableVehicles.length > 0 && (
+            <div className="mb-3">
+              <label className="block text-xs text-text-secondary mb-1">
+                Vehicle (Optional)
+              </label>
+              <select
+                value={selectedVehicleId || ""}
+                onChange={(e) => setSelectedVehicleId(e.target.value ? parseInt(e.target.value) : null)}
+                className="w-full px-3 py-2 bg-bg-primary border border-bg-primary/60 rounded-lg text-text-primary text-xs focus:outline-none focus:border-accent"
+              >
+                <option value="">None</option>
+                {availableVehicles.map(vehicle => (
+                  <option key={vehicle.id} value={vehicle.id}>
+                    {vehicle.model} - {vehicle.license_plate}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            {!isTrackingLocation ? (
+              <button
+                onClick={startLocationTracking}
+                className="flex-1 px-4 py-2 bg-accent text-bg-primary rounded-lg hover:bg-accent-hover transition font-medium text-sm flex items-center justify-center gap-2"
+                disabled={updatingLocation}
+              >
+                {updatingLocation ? (
+                  <>
+                    <span className="animate-spin">⏳</span>
+                    Updating...
+                  </>
+                ) : (
+                  <>
+                    📍 Start Tracking
+                  </>
+                )}
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={getCurrentLocation}
+                  className="flex-1 px-3 py-2 bg-bg-primary text-text-primary border border-bg-primary/60 rounded-lg hover:bg-bg-primary/80 transition text-sm"
+                  disabled={updatingLocation}
+                >
+                  {updatingLocation ? "Updating..." : "Update Now"}
+                </button>
+                <button
+                  onClick={stopLocationTracking}
+                  className="flex-1 px-3 py-2 bg-red-500/80 text-white rounded-lg hover:bg-red-500 transition font-medium text-sm"
+                >
+                  Stop
+                </button>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Footer Tabs */}

@@ -66,11 +66,6 @@ def require_role(require_roles: List[str]):
         return current_user
     return role_checker
 
-def hash_password(password:str):
-    if len(password) == 0:
-        raise ValueError("Password cannot be empty")
-    return pwd_context.hash(password)
-
 def hash_password(password: str):
     if not password or len(password.strip()) == 0:
         raise HTTPException(status_code=400, detail="Password cannot be empty")
@@ -97,6 +92,11 @@ class UserCreate(BaseModel):
 class OrderCreate(BaseModel):
     customer_name: str
     delivery_address: str
+    delivery_latitude: float = None  # Optional coordinates
+    delivery_longitude: float = None
+    pickup_address: str = None  # Optional pickup location
+    pickup_latitude: float = None
+    pickup_longitude: float = None
     assigned_agent_id: int = None  # Optional, will be assigned by admin
 
 class OrderApproval(BaseModel):
@@ -109,7 +109,14 @@ class OrderStatusUpdate(BaseModel):
 class VehicleCreate(BaseModel):
     license_plate: str
     model: str
+    vehicle_type: str
     status: str = "available"
+    
+class VehicleApproval(BaseModel):
+    approval_status: str  # "approved" or "rejected"
+    
+class VehicleAgentAssignment(BaseModel):
+    assigned_agent_id: int
 
 class DriverLocationCreate(BaseModel):
     agent_id: int
@@ -147,6 +154,16 @@ def read_root():
 
 @app.post("/signup/")
 async def signup(user: UserCreate, db: Session = Depends(get_db)):
+    # Validate role
+    valid_roles = ["admin", "agent", "owner"]
+    if user.role not in valid_roles:
+        raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
+    
+    # Check if email already exists
+    existing_user = db.query(User).filter(User.email == user.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
     hashed_pw = hash_password(user.password)
     db_user = User(
         name=user.name,
@@ -244,6 +261,11 @@ async def create_order(order: OrderCreate, db: Session = Depends(get_db), curren
     db_order = Order(
         customer_name=order.customer_name,
         delivery_address=order.delivery_address,
+        delivery_latitude=order.delivery_latitude if order.delivery_latitude else None,
+        delivery_longitude=order.delivery_longitude if order.delivery_longitude else None,
+        pickup_address=order.pickup_address if order.pickup_address else None,
+        pickup_latitude=order.pickup_latitude if order.pickup_latitude else None,
+        pickup_longitude=order.pickup_longitude if order.pickup_longitude else None,
         assigned_agent_id=order.assigned_agent_id if order.assigned_agent_id else None,
         owner_id=owner_id,
         status="pending"  # Always start as pending
@@ -283,30 +305,42 @@ async def approve_order(
     db: Session = Depends(get_db),
     current_user: dict = Depends(require_role(["admin"]))
 ):
-    """Admin approves order and assigns agent"""
+    """Admin approves order and assigns agent, or reassigns agent for existing orders"""
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    if order.status != "pending":
-        raise HTTPException(status_code=400, detail=f"Order is already {order.status}, cannot approve")
+    # Validate assigned_agent_id is provided and is a valid integer
+    try:
+        agent_id = int(approval.assigned_agent_id)
+        if agent_id <= 0:
+            raise HTTPException(status_code=400, detail="assigned_agent_id must be a valid positive integer")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="assigned_agent_id must be a valid integer")
     
     # Verify agent exists and is actually an agent
-    agent = db.query(User).filter(User.id == approval.assigned_agent_id, User.role == "agent").first()
+    from sqlalchemy import and_
+    agent = db.query(User).filter(and_(User.id == approval.assigned_agent_id, User.role == "agent")).first()
     if not agent:
-        raise HTTPException(status_code=404, detail="Agent not found")
+        raise HTTPException(status_code=404, detail=f"Agent with ID {approval.assigned_agent_id} not found or is not an agent")
+    
+    # If order is pending, approve it. Otherwise, just reassign agent.
+    was_pending = order.status == "pending"
+    old_agent_id = order.assigned_agent_id
     
     order.assigned_agent_id = approval.assigned_agent_id
-    order.status = "approved"
+    if was_pending:
+        order.status = "approved"
     db.commit()
     db.refresh(order)
     
     message = json.dumps({
         "event": "order_status",
         "order_id": order_id,
-        "new_status": "approved",
+        "new_status": order.status,
         "owner_id": order.owner_id,
-        "assigned_agent_id": approval.assigned_agent_id
+        "assigned_agent_id": approval.assigned_agent_id,
+        "old_agent_id": old_agent_id
     })
     await redis_pool.publish("ops_events", message)
     return order
@@ -360,6 +394,13 @@ async def update_order_status(
                 raise HTTPException(status_code=400, detail="Vehicle is not available")
             order.vehicle_id = status_update.vehicle_id
             vehicle.status = "in_use"
+            # Update vehicle location to agent's current location
+            agent_location = db.query(DriverLocation).filter(
+                DriverLocation.agent_id == user_id
+            ).order_by(DriverLocation.timestamp.desc()).first()
+            if agent_location:
+                vehicle.current_latitude = agent_location.latitude
+                vehicle.current_longitude = agent_location.longitude
             db.commit()
     
     # Release vehicle when order is delivered
@@ -377,9 +418,11 @@ async def update_order_status(
         "event": "order_status", 
         "order_id": order_id, 
         "new_status": status_update.status,
-        "owner_id": order.owner_id
+        "owner_id": order.owner_id,
+        "assigned_agent_id": order.assigned_agent_id
     })
-    await redis_pool.publish("ops_events", message)    
+    await redis_pool.publish("ops_events", message)
+    
     return order
 
 @app.websocket("/ws/orders")
@@ -405,6 +448,13 @@ async def update_location(loc: DriverLocationCreate, db: Session = Depends(get_d
         longitude=loc.longitude
     )
     db.add(driver_location)
+    
+    # Update vehicle location if agent is assigned to a vehicle
+    vehicle = db.query(Vehicle).filter(Vehicle.assigned_agent_id == loc.agent_id).first()
+    if vehicle:
+        vehicle.current_latitude = loc.latitude
+        vehicle.current_longitude = loc.longitude
+    
     db.commit()
     db.refresh(driver_location)
     message = json.dumps({
@@ -433,19 +483,133 @@ def get_locations(db: Session = Depends(get_db), current_user: dict = Depends(re
     
     return latest_locations
 
+@app.get("/agents/")
+def get_agents(db: Session = Depends(get_db), current_user: dict = Depends(require_role(["admin","owner"]))):
+    """Get agents - owners see agents assigned to their orders, admins see all agents"""
+    user_role = current_user.get("role")
+    user_id = current_user.get("user_id")
+    
+    if user_role == "owner" and user_id:
+        # Get unique agent IDs from owner's orders
+        owner_orders = db.query(Order).filter(Order.owner_id == user_id).all()
+        agent_ids = list(set([o.assigned_agent_id for o in owner_orders if o.assigned_agent_id]))
+        
+        if agent_ids:
+            # Return agents assigned to owner's orders
+            from sqlalchemy import and_
+            return db.query(User).filter(and_(User.id.in_(agent_ids), User.role == "agent")).all()
+        else:
+            return []
+    else:
+        # Admin sees all agents
+        return db.query(User).filter(User.role == "agent").all()
+
 @app.get("/vehicles/")
 def get_vehicles(db: Session = Depends(get_db), current_user: dict = Depends(require_role(["admin", "agent", "owner"]))):
+    user_role = current_user.get("role")
+    user_id = current_user.get("user_id")
+    
+    # Owners can only see their own vehicles
+    if user_role == "owner" and user_id:
+        return db.query(Vehicle).filter(Vehicle.owner_id == user_id).all()
+    # Admin and agent can see all vehicles
     return db.query(Vehicle).all()
 
 @app.post("/vehicles/")
-async def create_vehicle(vehicle_data: VehicleCreate, db: Session = Depends(get_db), current_user: dict = Depends(require_role(["admin"]))):
+async def create_vehicle(vehicle_data: VehicleCreate, db: Session = Depends(get_db), current_user: dict = Depends(require_role(["admin", "agent", "owner"]))):
+    user_role = current_user.get("role")
+    user_id = current_user.get("user_id")
+    
+    # Set owner_id if user is owner
+    owner_id = user_id if user_role == "owner" else None
+    # Owners register vehicles as pending, admins can set status directly
+    approval_status = "pending" if user_role == "owner" else "approved"
+    
     vehicle = Vehicle(
         license_plate=vehicle_data.license_plate,
         model=vehicle_data.model,
-        status=vehicle_data.status
+        vehicle_type=vehicle_data.vehicle_type,
+        status=vehicle_data.status,
+        approval_status=approval_status,
+        owner_id=owner_id
     )
     db.add(vehicle)
     db.commit()
     db.refresh(vehicle)
+    
+    # Broadcast vehicle registration event
+    message = json.dumps({
+        "event": "vehicle_registered",
+        "vehicle_id": vehicle.id,
+        "owner_id": owner_id,
+        "approval_status": approval_status
+    })
+    await redis_pool.publish("ops_events", message)
+    
+    return vehicle
+
+@app.patch("/vehicles/{vehicle_id}/approve")
+async def approve_vehicle(
+    vehicle_id: int,
+    approval: VehicleApproval,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_role(["admin", "owner"]))
+):
+    """Admin or owner approves or rejects a fleet vehicle (owners can only approve their own vehicles)"""
+    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    
+    user_role = current_user.get("role")
+    user_id = current_user.get("user_id")
+    
+    # Owners can only approve their own vehicles
+    if user_role == "owner":
+        if vehicle.owner_id != user_id:
+            raise HTTPException(status_code=403, detail="You can only approve vehicles you registered")
+    
+    vehicle.approval_status = approval.approval_status
+    # If approved, set status to available if it was pending
+    if approval.approval_status == "approved" and vehicle.status == "pending":
+        vehicle.status = "available"
+    
+    db.commit()
+    db.refresh(vehicle)
+    
+    # Broadcast vehicle approval event
+    message = json.dumps({
+        "event": "vehicle_approved",
+        "vehicle_id": vehicle_id,
+        "approval_status": approval.approval_status,
+        "owner_id": vehicle.owner_id
+    })
+    await redis_pool.publish("ops_events", message)
+    
+    return vehicle
+
+@app.patch("/vehicles/{vehicle_id}/assign-agent")
+async def assign_agent_to_vehicle(
+    vehicle_id: int,
+    assignment: VehicleAgentAssignment,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(require_role(["admin"]))
+):
+    """Admin assigns an agent to a vehicle"""
+    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
+    if not vehicle:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    
+    if vehicle.approval_status != "approved":
+        raise HTTPException(status_code=400, detail="Vehicle must be approved before assigning an agent")
+    
+    # Verify agent exists and is actually an agent
+    agent = db.query(User).filter(User.id == assignment.assigned_agent_id, User.role == "agent").first()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    vehicle.assigned_agent_id = assignment.assigned_agent_id
+    db.commit()
+    db.refresh(vehicle)
+    
     return vehicle
 
