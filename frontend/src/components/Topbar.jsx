@@ -13,10 +13,6 @@ export default function Topbar({ title = "Dashboard", actions }) {
           <div className="text-xs text-text-secondary mt-0.5">Welcome back{user?.role ? `, ${user.role}` : ""}</div>
         </div>
         <div className="hidden md:flex items-center gap-3">
-          <input
-            placeholder="Search orders, agents, fleet..."
-            className="px-3 py-2 rounded-lg bg-bg-secondary/70 border border-bg-primary/60 text-sm text-text-primary placeholder:text-text-secondary focus:outline-none focus:ring-2 focus:ring-accent/40"
-          />
           {actions}
           <button
             onClick={logout}
