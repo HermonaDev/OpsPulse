@@ -19,6 +19,11 @@ class Order(Base):
     id = Column(Integer, primary_key=True, index=True)
     customer_name = Column(String, index=True)
     delivery_address = Column(String)
+    delivery_latitude = Column(Float, nullable=True)  # Delivery location coordinates
+    delivery_longitude = Column(Float, nullable=True)
+    pickup_address = Column(String, nullable=True)  # Optional pickup address
+    pickup_latitude = Column(Float, nullable=True)  # Pickup location coordinates
+    pickup_longitude = Column(Float, nullable=True)
     status = Column(String, default="pending")# "pending", "approved", "picked_up", "in_transit", "delivered"
     assigned_agent_id = Column(Integer, ForeignKey('users.id'))
     owner_id = Column(Integer, ForeignKey('users.id'), nullable=True)  # Owner who created/manages this order
@@ -35,8 +40,18 @@ class Vehicle(Base):
     id = Column(Integer, primary_key=True, index=True)
     license_plate = Column(String, unique=True, index=True)
     model = Column(String)
+    vehicle_type = Column(String)  # "truck", "van", "car", etc.
     status = Column(String, default="available")  # "available", "in_use", "maintenance"
+    approval_status = Column(String, default="pending")  # "pending", "approved", "rejected"
+    owner_id = Column(Integer, ForeignKey('users.id'), nullable=True)  # Owner who registered the vehicle
+    assigned_agent_id = Column(Integer, ForeignKey('users.id'), nullable=True)  # Agent assigned to vehicle
+    current_latitude = Column(Float, nullable=True)  # Current vehicle location
+    current_longitude = Column(Float, nullable=True)  # Current vehicle location
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    
+    owner = relationship("User", foreign_keys=[owner_id])
+    assigned_agent = relationship("User", foreign_keys=[assigned_agent_id])
 
 class DriverLocation(Base):
     __tablename__ = "driver_locations"
