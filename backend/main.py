@@ -1,5 +1,6 @@
 from backend import db, models
 from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Security
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from backend.models import User, Order, DriverLocation, Vehicle
 from backend.db import SessionLocal
@@ -21,7 +22,17 @@ load_dotenv(dotenv_path="./backend/.env")
 
 app= FastAPI()
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 redis_pool = None
+redis_available = False
 
 load_dotenv("startup")
 
@@ -36,9 +47,16 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login/")
 
 @app.on_event("startup")
 async def startup():
-    global redis_pool
+    global redis_pool, redis_available
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
-    redis_pool = await redis.from_url(redis_url, decode_responses=True)
+    try:
+        redis_pool = await redis.from_url(redis_url, decode_responses=True)
+        # Test connection
+        await redis_pool.ping()
+        redis_available = True
+    except Exception as e:
+        print(f"Redis not available: {e}. Continuing without Redis (real-time features disabled).")
+        redis_available = False
 
 def get_db():
     db = SessionLocal()
@@ -154,8 +172,8 @@ def read_root():
 
 @app.post("/signup/")
 async def signup(user: UserCreate, db: Session = Depends(get_db)):
-    # Validate role
-    valid_roles = ["admin", "agent", "owner"]
+    # Validate role - allow pending roles for signup (will be approved by admin later)
+    valid_roles = ["admin", "agent", "owner", "agent_pending", "owner_pending"]
     if user.role not in valid_roles:
         raise HTTPException(status_code=400, detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}")
     
@@ -176,14 +194,15 @@ async def signup(user: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_user)
     # Broadcast signup event to admins
-    message = json.dumps({
-        "event": "user_signup",
-        "user_id": db_user.id,
-        "name": db_user.name,
-        "email": db_user.email,
-        "role": db_user.role
-    })
-    await redis_pool.publish("ops_events", message)
+    if redis_available:
+        message = json.dumps({
+            "event": "user_signup",
+            "user_id": db_user.id,
+            "name": db_user.name,
+            "email": db_user.email,
+            "role": db_user.role
+        })
+        await redis_pool.publish("ops_events", message)
     return {"message": "User created successfully"}
 
 @app.post("/login/", response_model=Token)
@@ -191,6 +210,14 @@ def login(user: UserLogin, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == user.email).first()
     if not db_user or not verify_password(user.password, db_user.hashed_password):
         raise HTTPException(status_code=400, detail="Invalid credentials")
+    
+    # Prevent pending users from logging in until admin approval
+    if db_user.role in ["agent_pending", "owner_pending"]:
+        raise HTTPException(
+            status_code=403, 
+            detail="Your account is pending admin approval. Please wait for an admin to verify your account."
+        )
+    
     expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token_data = {"sub": db_user.email, "role": db_user.role, "user_id": db_user.id}
     access_token = jwt.encode(token_data, SECRET_KEY, algorithm=ALGORITHM)
@@ -231,23 +258,25 @@ async def update_user_role(
         db.delete(db_user)
         db.commit()
         # Broadcast user deleted event
-        message = json.dumps({
-            "event": "user_deleted",
-            "user_id": user_id
-        })
-        await redis_pool.publish("ops_events", message)
+        if redis_available:
+            message = json.dumps({
+                "event": "user_deleted",
+                "user_id": user_id
+            })
+            await redis_pool.publish("ops_events", message)
         return {"message": "User rejected and deleted successfully"}
     
     db_user.role = role_update.role
     db.commit()
     db.refresh(db_user)
     # Broadcast role update event
-    message = json.dumps({
-        "event": "user_role_updated",
-        "user_id": user_id,
-        "new_role": role_update.role
-    })
-    await redis_pool.publish("ops_events", message)
+    if redis_available:
+        message = json.dumps({
+            "event": "user_role_updated",
+            "user_id": user_id,
+            "new_role": role_update.role
+        })
+        await redis_pool.publish("ops_events", message)
     return db_user
 
 @app.post("/orders/")
@@ -273,14 +302,15 @@ async def create_order(order: OrderCreate, db: Session = Depends(get_db), curren
     db.add(db_order)
     db.commit()
     db.refresh(db_order)
-    message = json.dumps({
-        "event": "order_created", 
-        "order_id": db_order.id, 
-        "customer_name": db_order.customer_name,
-        "owner_id": db_order.owner_id,
-        "status": db_order.status
-    })
-    await redis_pool.publish("ops_events", message)
+    if redis_available:
+        message = json.dumps({
+            "event": "order_created", 
+            "order_id": db_order.id, 
+            "customer_name": db_order.customer_name,
+            "owner_id": db_order.owner_id,
+            "status": db_order.status
+        })
+        await redis_pool.publish("ops_events", message)
     return db_order
 
 @app.get("/orders/")
@@ -334,15 +364,16 @@ async def approve_order(
     db.commit()
     db.refresh(order)
     
-    message = json.dumps({
-        "event": "order_status",
-        "order_id": order_id,
-        "new_status": order.status,
-        "owner_id": order.owner_id,
-        "assigned_agent_id": approval.assigned_agent_id,
-        "old_agent_id": old_agent_id
-    })
-    await redis_pool.publish("ops_events", message)
+    if redis_available:
+        message = json.dumps({
+            "event": "order_status",
+            "order_id": order_id,
+            "new_status": order.status,
+            "owner_id": order.owner_id,
+            "assigned_agent_id": approval.assigned_agent_id,
+            "old_agent_id": old_agent_id
+        })
+        await redis_pool.publish("ops_events", message)
     return order
 
 @app.patch("/orders/{order_id}/status")
@@ -414,20 +445,24 @@ async def update_order_status(
     db.commit()
     db.refresh(order)
     
-    message = json.dumps({
-        "event": "order_status", 
-        "order_id": order_id, 
-        "new_status": status_update.status,
-        "owner_id": order.owner_id,
-        "assigned_agent_id": order.assigned_agent_id
-    })
-    await redis_pool.publish("ops_events", message)
+    if redis_available:
+        message = json.dumps({
+            "event": "order_status", 
+            "order_id": order_id, 
+            "new_status": status_update.status,
+            "owner_id": order.owner_id,
+            "assigned_agent_id": order.assigned_agent_id
+        })
+        await redis_pool.publish("ops_events", message)
     
     return order
 
 @app.websocket("/ws/orders")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
+    if not redis_available:
+        await websocket.close(code=1003, reason="Redis not available")
+        return
     pubsub = redis_pool.pubsub()
     await pubsub.subscribe("ops_events")
     try:
@@ -457,13 +492,14 @@ async def update_location(loc: DriverLocationCreate, db: Session = Depends(get_d
     
     db.commit()
     db.refresh(driver_location)
-    message = json.dumps({
-        "event": "location_update",
-        "agent_id": loc.agent_id,
-        "latitude": loc.latitude,
-        "longitude": loc.longitude
-    })
-    await redis_pool.publish("ops_events", message)
+    if redis_available:
+        message = json.dumps({
+            "event": "location_update",
+            "agent_id": loc.agent_id,
+            "latitude": loc.latitude,
+            "longitude": loc.longitude
+        })
+        await redis_pool.publish("ops_events", message)
     return driver_location
 
 @app.get("/locations/")
@@ -538,13 +574,14 @@ async def create_vehicle(vehicle_data: VehicleCreate, db: Session = Depends(get_
     db.refresh(vehicle)
     
     # Broadcast vehicle registration event
-    message = json.dumps({
-        "event": "vehicle_registered",
-        "vehicle_id": vehicle.id,
-        "owner_id": owner_id,
-        "approval_status": approval_status
-    })
-    await redis_pool.publish("ops_events", message)
+    if redis_available:
+        message = json.dumps({
+            "event": "vehicle_registered",
+            "vehicle_id": vehicle.id,
+            "owner_id": owner_id,
+            "approval_status": approval_status
+        })
+        await redis_pool.publish("ops_events", message)
     
     return vehicle
 
@@ -577,13 +614,14 @@ async def approve_vehicle(
     db.refresh(vehicle)
     
     # Broadcast vehicle approval event
-    message = json.dumps({
-        "event": "vehicle_approved",
-        "vehicle_id": vehicle_id,
-        "approval_status": approval.approval_status,
-        "owner_id": vehicle.owner_id
-    })
-    await redis_pool.publish("ops_events", message)
+    if redis_available:
+        message = json.dumps({
+            "event": "vehicle_approved",
+            "vehicle_id": vehicle_id,
+            "approval_status": approval.approval_status,
+            "owner_id": vehicle.owner_id
+        })
+        await redis_pool.publish("ops_events", message)
     
     return vehicle
 

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { API_BASE_URL } from "../config";
 
 export default function SignupPage() {
   const navigate = useNavigate();
@@ -18,7 +19,7 @@ export default function SignupPage() {
     try {
       // Create all users as pending - requires admin verification
       const submitRole = role === "owner" ? "owner_pending" : "agent_pending";
-      const res = await fetch("/api/signup/", {
+      const res = await fetch(`${API_BASE_URL}/signup/`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, email, password, role: submitRole, phone })

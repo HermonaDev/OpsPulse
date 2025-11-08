@@ -23,7 +23,8 @@ export default function LoginPage() {
           else if (role === "agent") navigate("/dashboard/agent");
           else navigate("/dashboard/owner");
         } catch (err) {
-          setError("Invalid credentials or server unreachable");
+          // Display the error message from the API (includes pending approval messages)
+          setError(err.message || "Invalid credentials or server unreachable");
         }
     }
 

@@ -1,4 +1,6 @@
-export async function fetchOrders(baseUrl = "/api", token) {
+import { API_BASE_URL } from "../config";
+
+export async function fetchOrders(baseUrl = API_BASE_URL, token) {
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/orders/`, { headers });
@@ -6,7 +8,7 @@ export async function fetchOrders(baseUrl = "/api", token) {
   return await res.json();
 }
 
-export async function fetchLocations(baseUrl = "/api", token) {
+export async function fetchLocations(baseUrl = API_BASE_URL, token) {
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/locations/`, { headers });
@@ -14,7 +16,7 @@ export async function fetchLocations(baseUrl = "/api", token) {
   return await res.json();
 }
 
-export async function updateOrderStatus(orderId, status, baseUrl = "/api", token, vehicleId = null) {
+export async function updateOrderStatus(orderId, status, baseUrl = API_BASE_URL, token, vehicleId = null) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const body = { status };
@@ -28,7 +30,7 @@ export async function updateOrderStatus(orderId, status, baseUrl = "/api", token
   return await res.json();
 }
 
-export async function fetchVehicles(baseUrl = "/api", token) {
+export async function fetchVehicles(baseUrl = API_BASE_URL, token) {
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/vehicles/`, { headers });
@@ -36,7 +38,7 @@ export async function fetchVehicles(baseUrl = "/api", token) {
   return await res.json();
 }
 
-export async function createVehicle(vehicleData, baseUrl = "/api", token) {
+export async function createVehicle(vehicleData, baseUrl = API_BASE_URL, token) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/vehicles/`, {
@@ -51,7 +53,7 @@ export async function createVehicle(vehicleData, baseUrl = "/api", token) {
   return await res.json();
 }
 
-export async function approveVehicle(vehicleId, approvalStatus, baseUrl = "/api", token) {
+export async function approveVehicle(vehicleId, approvalStatus, baseUrl = API_BASE_URL, token) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/vehicles/${vehicleId}/approve`, {
@@ -63,7 +65,7 @@ export async function approveVehicle(vehicleId, approvalStatus, baseUrl = "/api"
   return await res.json();
 }
 
-export async function assignAgentToVehicle(vehicleId, agentId, baseUrl = "/api", token) {
+export async function assignAgentToVehicle(vehicleId, agentId, baseUrl = API_BASE_URL, token) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/vehicles/${vehicleId}/assign-agent`, {
@@ -75,7 +77,7 @@ export async function assignAgentToVehicle(vehicleId, agentId, baseUrl = "/api",
   return await res.json();
 }
 
-export async function fetchUsers(baseUrl = "/api", token) {
+export async function fetchUsers(baseUrl = API_BASE_URL, token) {
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/admin/users/`, { headers });
@@ -83,7 +85,7 @@ export async function fetchUsers(baseUrl = "/api", token) {
   return await res.json();
 }
 
-export async function fetchAgents(baseUrl = "/api", token) {
+export async function fetchAgents(baseUrl = API_BASE_URL, token) {
   const headers = {};
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/agents/`, { headers });
@@ -91,7 +93,7 @@ export async function fetchAgents(baseUrl = "/api", token) {
   return await res.json();
 }
 
-export async function approveUser(userId, newRole, baseUrl = "/api", token) {
+export async function approveUser(userId, newRole, baseUrl = API_BASE_URL, token) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/admin/users/${userId}/role`, {
@@ -103,7 +105,7 @@ export async function approveUser(userId, newRole, baseUrl = "/api", token) {
   return await res.json();
 }
 
-export async function createOrder(orderData, baseUrl = "/api", token) {
+export async function createOrder(orderData, baseUrl = API_BASE_URL, token) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/orders/`, {
@@ -115,7 +117,7 @@ export async function createOrder(orderData, baseUrl = "/api", token) {
   return await res.json();
 }
 
-export async function approveOrder(orderId, agentId, baseUrl = "/api", token) {
+export async function approveOrder(orderId, agentId, baseUrl = API_BASE_URL, token) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const body = { assigned_agent_id: parseInt(agentId) };
@@ -131,7 +133,7 @@ export async function approveOrder(orderId, agentId, baseUrl = "/api", token) {
   return await res.json();
 }
 
-export async function updateLocation(locationData, baseUrl = "/api", token) {
+export async function updateLocation(locationData, baseUrl = API_BASE_URL, token) {
   const headers = { "Content-Type": "application/json" };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${baseUrl}/locations/`, {
