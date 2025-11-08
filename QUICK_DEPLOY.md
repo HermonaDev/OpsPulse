@@ -48,14 +48,17 @@
    - Click "Add New..." → "Project"
    - Import your repo
    - Settings:
-     - **Framework**: Vite
-     - **Root Directory**: `frontend`
-     - **Build Command**: `npm run build`
+     - **Framework Preset**: Vite
+     - **Root Directory**: `frontend` ⚠️ **IMPORTANT: Set this to `frontend`**
+     - **Build Command**: (leave empty or `npm run build`)
      - **Output Directory**: `dist`
+     - **Install Command**: (leave empty or `npm ci`)
    - Environment Variable:
      - `VITE_API_URL`: `https://opspulse-backend.onrender.com/api` (your backend URL + /api)
    - Click "Deploy"
    - **Copy the URL** (e.g., `https://opspulse.vercel.app`)
+   
+   **Note:** If you get Rollup errors, the Root Directory must be set to `frontend` in Vercel dashboard settings.
 
 #### Initialize Database
 
