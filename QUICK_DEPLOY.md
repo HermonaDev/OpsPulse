@@ -30,10 +30,11 @@
      - **Name**: `opspulse-backend`
      - **Build Command**: `pip install -r backend/requirements.txt`
      - **Start Command**: `PYTHONPATH=. uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
+     - **Python Version**: Make sure `runtime.txt` specifies Python 3.12 (Render may default to 3.13 which has issues)
      - **OR** use the startup script: `chmod +x start_backend.sh && ./start_backend.sh`
    - Environment Variables:
      - `SECRET_KEY`: `your-secret-key-here` (any random string)
-     - `DATABASE_URL`: (paste from step 3)
+     - `DATABASE_URL`: (paste from step 3 - should be `postgresql://...`)
    - Click "Create Web Service"
    - **Wait 5-10 minutes, copy the URL** (e.g., `https://opspulse-backend.onrender.com`)
 
@@ -134,6 +135,8 @@
 - Check Render logs
 - Verify `DATABASE_URL` is set
 - Check build logs for missing dependencies
+- **Python 3.13 / psycopg2 error?** The code now uses `psycopg` (v3) which supports Python 3.13
+  - If issues persist, ensure `runtime.txt` specifies Python 3.12 in Render settings
 
 **Frontend can't connect?**
 - Verify `VITE_API_URL` is correct (should end with `/api`)
@@ -143,6 +146,7 @@
 **Database errors?**
 - Run init script in Render Shell
 - Check database is running in Render dashboard
+- Verify connection string format (should be `postgresql://...`)
 
 ---
 
