@@ -60,20 +60,45 @@
    
    **Note:** If you get Rollup errors, the Root Directory must be set to `frontend` in Vercel dashboard settings.
 
-#### Initialize Database
+#### Initialize Database & Create Admin User (FREE - No Shell Required!)
 
-1. Go to Render dashboard → Your backend service → "Shell"
-2. Run:
+**Tables are created automatically** when the backend starts (no action needed).
+
+**Create Admin User via HTTP (FREE method):**
+
+1. **Option 1: Use the Setup Endpoint (Recommended - One-time only)**
    ```bash
-   python -c "from backend.db import engine; from backend.models import Base; Base.metadata.create_all(engine)"
+   curl -X POST https://YOUR_BACKEND_URL/setup/ \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "Admin",
+       "email": "admin@test.com",
+       "password": "admin123",
+       "setup_key": "opspulse-setup-2024"
+     }'
+   ```
+   
+   Or use Postman/Insomnia:
+   - Method: POST
+   - URL: `https://YOUR_BACKEND_URL/setup/`
+   - Body (JSON):
+   ```json
+   {
+     "name": "Admin",
+     "email": "admin@test.com",
+     "password": "admin123",
+     "setup_key": "opspulse-setup-2024"
+   }
    ```
 
-3. Create admin user (via API or shell):
+2. **Option 2: Use Signup Endpoint (Always works)**
    ```bash
    curl -X POST https://YOUR_BACKEND_URL/signup/ \
      -H "Content-Type: application/json" \
-     -d '{"name":"Admin","email":"admin@test.com","password":"admin123","role":"admin","phone":"123"}'
+     -d '{"name":"Admin","email":"admin@test.com","password":"admin123","role":"admin","phone":""}'
    ```
+
+**Note:** The setup endpoint only works if no admin exists. After creating the first admin, use the signup endpoint or login with your admin account to create more users.
 
 **Done!** Visit your Vercel URL to see the app.
 

@@ -100,6 +100,12 @@ def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
 
+class SetupRequest(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+    setup_key: str
+
 class UserCreate(BaseModel):
     name: str
     email: EmailStr
@@ -169,6 +175,62 @@ manager = ConnectionManager()
 @app.get("/")
 def read_root():
     return {"message": "OpsPulse backend API is running"}
+
+@app.post("/setup/")
+async def setup_admin(
+    setup: SetupRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    One-time setup endpoint to create the first admin user.
+    This can only be used if no admin users exist in the database.
+    
+    Request body:
+    {
+        "name": "Admin User",
+        "email": "admin@example.com",
+        "password": "secure_password",
+        "setup_key": "opspulse-setup-2024"
+    }
+    
+    Note: You can also use the /signup/ endpoint with role="admin" which always works.
+    """
+    # Check setup key (simple protection)
+    expected_key = os.getenv("SETUP_KEY", "opspulse-setup-2024")
+    if setup.setup_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid setup key")
+    
+    # Check if any admin already exists
+    existing_admin = db.query(User).filter(User.role == "admin").first()
+    if existing_admin:
+        raise HTTPException(
+            status_code=400, 
+            detail="Admin user already exists. Please use the login endpoint or create users via signup."
+        )
+    
+    # Check if email already exists
+    existing_user = db.query(User).filter(User.email == setup.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Create admin user
+    hashed_pw = hash_password(setup.password)
+    admin_user = User(
+        name=setup.name,
+        email=setup.email,
+        hashed_password=hashed_pw,
+        role="admin",
+        phone=""
+    )
+    db.add(admin_user)
+    db.commit()
+    db.refresh(admin_user)
+    
+    return {
+        "message": "Admin user created successfully!",
+        "email": admin_user.email,
+        "note": "You can now login with this admin account."
+    }
 
 @app.post("/signup/")
 async def signup(user: UserCreate, db: Session = Depends(get_db)):
